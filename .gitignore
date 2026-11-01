@@ -45,3 +45,5 @@ next-env.d.ts
 # Local backup files
 *.backup
 eventpilot-page.tsx
+# Generated Prisma clients
+/generated/

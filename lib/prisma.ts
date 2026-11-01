@@ -1,15 +1,30 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient as SQLitePrismaClient } from "../generated/sqlite";
+import { PrismaClient as PostgresPrismaClient } from "../generated/postgres";
 
 const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
+  sqlitePrisma?: SQLitePrismaClient;
+  postgresPrisma?: PostgresPrismaClient;
 };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+const isVercel = process.env.VERCEL === "1";
+
+const sqliteClient =
+  globalForPrisma.sqlitePrisma ??
+  new SQLitePrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  });
+
+const postgresClient =
+  globalForPrisma.postgresPrisma ??
+  new PostgresPrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
 if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.sqlitePrisma = sqliteClient;
+  globalForPrisma.postgresPrisma = postgresClient;
 }
+
+export const prisma: PostgresPrismaClient = (
+  isVercel ? postgresClient : sqliteClient
+) as PostgresPrismaClient;

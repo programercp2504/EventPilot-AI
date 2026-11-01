@@ -1,15 +1,17 @@
+
 {
   "name": "eventpilot-ai",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "prisma generate && next build",
-    "start": "next start",
-    "lint": "eslint",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
-  },
+  "dev": "next dev",
+  "build": "prisma generate --schema=prisma/schema.prisma && prisma generate --schema=prisma-postgres/schema.prisma && next build",
+  "start": "next start",
+  "lint": "eslint",
+  "db:migrate": "prisma migrate dev",
+  "db:deploy:postgres": "prisma migrate deploy --schema=prisma-postgres/schema.prisma",
+  "db:studio": "prisma studio"
+},
   "dependencies": {
     "@prisma/client": "^6.19.0",
     "bcryptjs": "^3.0.3",
