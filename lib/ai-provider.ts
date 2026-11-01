@@ -17,16 +17,21 @@ export async function generateAiText({
   temperature = 0.7,
   maxOutputTokens = 1000,
   json = false,
-  timeoutMs = 45_000,
+  timeoutMs = 90_000,
 }: AiProviderOptions): Promise<{
   text: string;
   engine: "gemini" | "ollama";
 } | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let timedOut = false;
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   try {
-    // Production: Gemini API
     if (process.env.VERCEL === "1") {
       const apiKey = process.env.GEMINI_API_KEY;
 
@@ -59,19 +64,23 @@ export async function generateAiText({
             generationConfig: {
               temperature,
               maxOutputTokens,
-              ...(json ? { responseMimeType: "application/json" } : {}),
+              ...(json
+                ? { responseMimeType: "application/json" }
+                : {}),
             },
           }),
-        },
+        }
       );
 
       if (!response.ok) {
         const errorText = await response.text();
+
         console.error(
           "Gemini API error:",
           response.status,
-          errorText.slice(0, 1000),
+          errorText.slice(0, 1000)
         );
+
         return null;
       }
 
@@ -83,6 +92,7 @@ export async function generateAiText({
         !("candidates" in payload) ||
         !Array.isArray(payload.candidates)
       ) {
+        console.error("Gemini returned an invalid response.");
         return null;
       }
 
@@ -97,21 +107,26 @@ export async function generateAiText({
         !("parts" in candidate.content) ||
         !Array.isArray(candidate.content.parts)
       ) {
+        console.error("Gemini response contains no valid content.");
         return null;
       }
 
-      const result = candidate.content.parts
+      const result = candidate.content
+        .parts
         .filter(
           (part: unknown): part is { text: string } =>
             typeof part === "object" &&
             part !== null &&
             "text" in part &&
-            typeof part.text === "string",
+            typeof part.text === "string"
         )
         .map((part: { text: string }) => part.text)
         .join("");
 
-      if (!result.trim()) return null;
+      if (!result.trim()) {
+        console.error("Gemini returned empty text.");
+        return null;
+      }
 
       return {
         text: result,
@@ -142,10 +157,13 @@ export async function generateAiText({
             num_predict: maxOutputTokens,
           },
         }),
-      },
+      }
     );
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error("Ollama API error:", response.status);
+      return null;
+    }
 
     const payload: unknown = await response.json();
 
@@ -158,6 +176,7 @@ export async function generateAiText({
       !("content" in payload.message) ||
       typeof payload.message.content !== "string"
     ) {
+      console.error("Ollama returned an invalid response.");
       return null;
     }
 
@@ -170,7 +189,14 @@ export async function generateAiText({
       engine: "ollama",
     };
   } catch (error) {
-    console.error("AI provider request failed:", error);
+    if (timedOut) {
+      console.error(
+        `AI provider timed out after ${timeoutMs}ms.`
+      );
+    } else {
+      console.error("AI provider request failed:", error);
+    }
+
     return null;
   } finally {
     clearTimeout(timeout);
