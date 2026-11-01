@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "https://event-pilot-ai-liart.vercel.app",
   "https://event-pilot-ai-git-main-acme0cp.vercel.app",
   "https://event-pilot-mppkqld00-acme0cp.vercel.app",
 ]);
