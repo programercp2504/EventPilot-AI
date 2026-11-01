@@ -1,36 +1,35 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+EVENTPILOT AI — FRONTEND + SQLITE DATABASE INTEGRATION
 
-## Getting Started
+This bundle includes:
+- app/page.tsx: updated dashboard that loads events from GET /api/events and uses the database API for create, edit, and delete. Event records are no longer read/written to localStorage.
+- app/api/events/route.ts: Prisma-backed GET, POST, PUT, DELETE API.
+- prisma/schema.prisma: SQLite Event model.
+- lib/prisma.ts: Prisma client singleton.
+- package.json: dependencies and scripts (merge with your current package.json if you have extra dependencies).
+- .env.example: DATABASE_URL example.
 
-First, run the development server:
+INSTALL IN YOUR EXISTING PROJECT (do not replace the entire project folder):
+1. Copy the files into the same paths in your existing eventpilot-ai folder. Back up app/page.tsx and app/api/events/route.ts first.
+2. Ensure root .env exists and contains exactly:
+   DATABASE_URL="file:./dev.db"
+3. In PowerShell, from the project root, run:
+   npm install
+   npx prisma generate
+   npx prisma migrate dev --name init
+   npm run dev
+4. Open http://localhost:3000/api/events. Expected JSON includes success:true and events: [].
+5. Create an event in the UI, then refresh the page. It should remain because it is stored in SQLite.
+6. Test edit and delete from My Events. They use PUT and DELETE API requests.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+IMPORTANT:
+- This page keeps theme and vendor checklist preferences in localStorage, but events are loaded from and saved to the database only.
+- If your existing package.json has extra dependencies, do not blindly overwrite it; add @prisma/client and prisma and merge the scripts.
+- SQLite URL file:./dev.db is resolved relative to the prisma schema, so the DB file will usually be prisma/dev.db.
+- Do not delete prisma/dev.db if you want to keep saved event records.
+- This local SQLite setup is for development/demo. For many production/serverless deployments, use a managed database instead.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+API endpoints:
+GET    /api/events
+POST   /api/events
+PUT    /api/events  (JSON body must include id)
+DELETE /api/events?id=<event-id>

@@ -24,3 +24,157 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+
+
+/* EventPilot AI theme overrides */
+[data-theme="dark"] aside {
+  background-color: #17172b !important;
+}
+
+[data-theme="dark"] article,
+[data-theme="dark"] section > section,
+[data-theme="dark"] [role="dialog"] {
+  background-color: #1c1d2b;
+  color: #f1f5f9;
+  border-color: #35364a;
+}
+
+[data-theme="dark"] .text-slate-900 {
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] .text-slate-700,
+[data-theme="dark"] .text-slate-600 {
+  color: #e2e8f0 !important;
+}
+
+[data-theme="dark"] .text-slate-500,
+[data-theme="dark"] .text-slate-400 {
+  color: #a7b0c3 !important;
+}
+
+[data-theme="dark"] .bg-white {
+  background-color: #1c1d2b !important;
+}
+
+[data-theme="dark"] .bg-slate-50,
+[data-theme="dark"] .bg-slate-100 {
+  background-color: #252638 !important;
+}
+
+[data-theme="dark"] .border-slate-200,
+[data-theme="dark"] .border-slate-200\/80,
+[data-theme="dark"] .border-slate-100 {
+  border-color: #35364a !important;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] select {
+  background-color: #252638;
+  color: #f1f5f9;
+  border-color: #45465b;
+}
+
+[data-theme="dark"] input::placeholder {
+  color: #a7b0c3;
+}
+
+[data-theme="dark"] .bg-rose-50 {
+  background-color: #45252f !important;
+}
+
+[data-theme="dark"] .bg-amber-50 {
+  background-color: #45351e !important;
+}
+
+[data-theme="dark"] .bg-violet-50 {
+  background-color: #33264f !important;
+}
+
+[data-theme="dark"] .bg-emerald-50 {
+  background-color: #1d3b32 !important;
+}
+
+[data-theme="dark"] .text-rose-700 {
+  color: #fda4af !important;
+}
+
+[data-theme="dark"] .text-amber-800 {
+  color: #fde68a !important;
+}
+
+[data-theme="dark"] .text-emerald-800 {
+  color: #a7f3d0 !important;
+}
+
+
+/* Fix: readable numbers and text in EventPilot dark mode */
+
+[data-theme="dark"] p,
+[data-theme="dark"] h1,
+[data-theme="dark"] h2,
+[data-theme="dark"] h3,
+[data-theme="dark"] h4,
+[data-theme="dark"] span,
+[data-theme="dark"] label,
+[data-theme="dark"] strong {
+  color: inherit;
+}
+
+/* Ensure budget amounts and numeric values are visible */
+[data-theme="dark"] .text-2xl,
+[data-theme="dark"] .text-3xl,
+[data-theme="dark"] .font-bold,
+[data-theme="dark"] .font-semibold {
+  color: #f8fafc;
+}
+
+/* Keep coloured category labels readable */
+[data-theme="dark"] .text-violet-700 {
+  color: #c4b5fd !important;
+}
+
+[data-theme="dark"] .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+
+[data-theme="dark"] .text-amber-700 {
+  color: #fcd34d !important;
+}
+
+/* Input numbers, dates and dropdown values */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] input[type="date"] {
+  color: #f8fafc !important;
+  background-color: #252638 !important;
+  border-color: #45465b !important;
+  -webkit-text-fill-color: #f8fafc;
+}
+
+/* Dropdown options */
+[data-theme="dark"] select option {
+  color: #f8fafc;
+  background-color: #252638;
+}
+
+/* Keep the budget progress bars visible */
+[data-theme="dark"] .bg-slate-100 {
+  background-color: #35364a !important;
+}
+
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] input[type="date"],
+[data-theme="dark"] input[type="text"] {
+  background-color: #252638 !important;
+  color: #f8fafc !important;
+  border-color: #45465b !important;
+  -webkit-text-fill-color: #f8fafc;
+}
+
+[data-theme="dark"] input:focus-visible {
+  outline: 2px solid #a78bfa;
+  outline-offset: 2px;
+}

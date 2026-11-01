@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Event {
+  id        String     @id @default(cuid())
+  name      String
+  type      String     @default("Other")
+  date      String
+  guests    Int
+  budget    Int
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  plan      EventPlan?
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  budgetItems     BudgetItem[]
+  checklistItems  ChecklistItem[]
+  copilotMessages CopilotMessage[]
+  vendors         Vendor[]
+
+  @@index([date])
+  @@index([createdAt])
+}
+
+model BudgetItem {
+  id        String   @id @default(cuid())
+  category  String
+  amount    Int
+  eventId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, category])
+  @@index([eventId])
+}
+
+model ChecklistItem {
+  id        String    @id @default(cuid())
+  title     String
+  category  String    @default("General")
+  completed Boolean   @default(false)
+  eventId   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  dueDate   DateTime?
+  event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+}
+
+model EventPlan {
+  id        String   @id @default(cuid())
+  eventId   String   @unique
+  data      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt])
+}
+
+model CopilotMessage {
+  id        String   @id @default(cuid())
+  eventId   String
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+}
+
+model Vendor {
+  id             String    @id @default(cuid())
+  name           String
+  category       String    @default("Other")
+  contactName    String?
+  phone          String?
+  email          String?
+  agreedCost     Int       @default(0)
+  amountPaid     Int       @default(0)
+  paymentDueDate DateTime?
+  notes          String?
+  eventId        String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([paymentDueDate])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  events Event[]
+}
