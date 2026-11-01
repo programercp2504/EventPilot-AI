@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "https://event-pilot-ai-git-main-acme0cp.vercel.app",
+  "https://event-pilot-mppkqld00-acme0cp.vercel.app",
 ]);
 
 const STATE_CHANGING_METHODS = new Set([
@@ -22,7 +24,6 @@ export function validateRequestOrigin(
 
   const origin = request.headers.get("origin");
 
-  // Reject missing Origin on browser-facing state-changing requests.
   if (!origin) {
     return NextResponse.json(
       {
@@ -35,6 +36,7 @@ export function validateRequestOrigin(
 
   try {
     const parsedOrigin = new URL(origin).origin;
+    const requestOrigin = new URL(request.url).origin;
 
     if (!ALLOWED_ORIGINS.has(parsedOrigin)) {
       return NextResponse.json(
@@ -45,8 +47,6 @@ export function validateRequestOrigin(
         { status: 403 }
       );
     }
-
-    const requestOrigin = new URL(request.url).origin;
 
     if (parsedOrigin !== requestOrigin) {
       return NextResponse.json(
