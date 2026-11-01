@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateRequestOrigin } from "@/lib/security";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
+import { generateAiText } from "@/lib/ai-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,11 +28,12 @@ type AiIdeas = {
   notes?: string[];
 };
 
+type AiEngine = "gemini" | "ollama" | "rule-based-fallback";
+
 const MAX_NAME_LENGTH = 120;
 const MAX_TYPE_LENGTH = 60;
 const MAX_BUDGET = 100_000_000;
 const MAX_GUESTS = 5000;
-const OLLAMA_TIMEOUT_MS = 45_000;
 
 const DEFAULT_IDEAS = {
   decoration: [
@@ -75,7 +77,11 @@ const DEFAULT_IDEAS = {
   >
 >;
 
-function text(value: unknown, fallback = "", maxLength = 1000): string {
+function text(
+  value: unknown,
+  fallback = "",
+  maxLength = 1000,
+): string {
   if (typeof value !== "string") return fallback;
 
   const result = value.trim().slice(0, maxLength);
@@ -334,69 +340,50 @@ function parseAiContent(content: unknown): AiIdeas | null {
   return parsed as AiIdeas;
 }
 
-async function getOllamaIdeas(
+async function getAiIdeas(
   event: PlanningEvent,
-): Promise<AiIdeas | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    OLLAMA_TIMEOUT_MS,
-  );
+): Promise<{
+  ideas: AiIdeas | null;
+  engine: AiEngine;
+}> {
+  const result = await generateAiText({
+    systemPrompt:
+      "You are EventPilot AI, a practical event planner. Return only valid JSON with keys summary, theme, colorPalette, decoration, food, entertainment, savingsTips, ideas, notes. summary and theme must be strings. All other keys must be arrays of short strings. Give specific, realistic suggestions suited to the event type, guest count, date, and budget. Treat all budgets as INR. Never claim live prices, vendor availability, or bookings. Keep arrays to 3-5 useful items. Do not generate budgetBreakdown, timeline, or checklist; those are calculated separately.",
+    userPrompt: JSON.stringify({
+      eventName: event.name,
+      eventType: event.type,
+      eventDate: event.date,
+      guests: event.guests,
+      budgetINR: event.budget,
+      request:
+        "Create a personalised event concept, colour palette, decoration, catering, entertainment, budget-saving tips, and additional feasible ideas. Avoid repetitive suggestions.",
+    }),
+    temperature: 0.7,
+    maxOutputTokens: 1500,
+    json: true,
+    timeoutMs: 45_000,
+  });
 
-  try {
-    const response = await fetch(
-      process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: process.env.OLLAMA_MODEL || "qwen2.5:1.5b",
-          stream: false,
-          format: "json",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are EventPilot AI, a practical event planner. Return only valid JSON with keys summary, theme, colorPalette, decoration, food, entertainment, savingsTips, ideas, notes. summary and theme must be strings. All other keys must be arrays of short strings. Give specific, realistic suggestions suited to the event type, guest count, date, and budget. Treat all budgets as INR. Never claim live prices, vendor availability, or bookings. Keep arrays to 3-5 useful items. Do not generate budgetBreakdown, timeline, or checklist; those are calculated separately.",
-            },
-            {
-              role: "user",
-              content: JSON.stringify({
-                eventName: event.name,
-                eventType: event.type,
-                eventDate: event.date,
-                guests: event.guests,
-                budgetINR: event.budget,
-                request:
-                  "Create a personalised event concept, colour palette, decoration, catering, entertainment, budget-saving tips, and additional feasible ideas. Avoid repetitive suggestions.",
-              }),
-            },
-          ],
-          options: {
-            temperature: 0.7,
-            num_predict: 700,
-          },
-        }),
-      },
-    );
-
-    if (!response.ok) return null;
-
-    const payload: unknown = await response.json();
-
-    if (!isRecord(payload) || !isRecord(payload.message)) {
-      return null;
-    }
-
-    return parseAiContent(payload.message.content);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
+  if (!result) {
+    return {
+      ideas: null,
+      engine: "rule-based-fallback",
+    };
   }
+
+  const ideas = parseAiContent(result.text);
+
+  if (!ideas) {
+    return {
+      ideas: null,
+      engine: "rule-based-fallback",
+    };
+  }
+
+  return {
+    ideas,
+    engine: result.engine,
+  };
 }
 
 function errorResponse(message: string, status: number) {
@@ -446,7 +433,10 @@ export async function GET(request: Request) {
     });
 
     if (!saved) {
-      return NextResponse.json({ success: true, plan: null });
+      return NextResponse.json({
+        success: true,
+        plan: null,
+      });
     }
 
     let plan: unknown;
@@ -483,14 +473,18 @@ export async function GET(request: Request) {
 // POST /api/plan
 export async function POST(request: NextRequest) {
   try {
-    const originError = validateRequestOrigin(request as NextRequest);
-if (originError) return originError;
+    const originError = validateRequestOrigin(request);
 
-const contentLength = Number(request.headers.get("content-length") || 0);
+    if (originError) return originError;
 
-if (contentLength > 10 * 1024) {
-  return errorResponse("Request body is too large.", 413);
-}
+    const contentLength = Number(
+      request.headers.get("content-length") || 0,
+    );
+
+    if (contentLength > 10 * 1024) {
+      return errorResponse("Request body is too large.", 413);
+    }
+
     const user = await getCurrentUser();
 
     if (!user) {
@@ -499,20 +493,20 @@ if (contentLength > 10 * 1024) {
 
     let body: unknown;
 
-try {
-  const rawBody = await request.text();
+    try {
+      const rawBody = await request.text();
 
-  if (new TextEncoder().encode(rawBody).length > 10 * 1024) {
-    return errorResponse("Request body is too large.", 413);
-  }
+      if (new TextEncoder().encode(rawBody).length > 10 * 1024) {
+        return errorResponse("Request body is too large.", 413);
+      }
 
-  body = JSON.parse(rawBody);
-} catch {
-  return errorResponse(
-    "Request body must contain valid JSON.",
-    400,
-  );
-}
+      body = JSON.parse(rawBody);
+    } catch {
+      return errorResponse(
+        "Request body must contain valid JSON.",
+        400,
+      );
+    }
 
     if (!isRecord(body)) {
       return errorResponse(
@@ -575,9 +569,10 @@ try {
 
     const eventId =
       typeof body.id === "string" ? body.id.trim() : "";
-      if (eventId.length > 200) {
-  return errorResponse("Invalid event ID.", 400);
-}
+
+    if (eventId.length > 200) {
+      return errorResponse("Invalid event ID.", 400);
+    }
 
     // If an event ID is supplied, it must belong to the logged-in user.
     if (eventId) {
@@ -609,7 +604,8 @@ try {
     }
 
     const fallback = fallbackIdeas(event);
-    const ai = await getOllamaIdeas(event);
+    const aiResult = await getAiIdeas(event);
+    const ai = aiResult.ideas;
 
     const merged: AiIdeas = ai
       ? {
@@ -625,7 +621,11 @@ try {
             fallback.decoration!,
             5,
           ),
-          food: stringArray(ai.food, fallback.food!, 5),
+          food: stringArray(
+            ai.food,
+            fallback.food!,
+            5,
+          ),
           entertainment: stringArray(
             ai.entertainment,
             fallback.entertainment!,
@@ -636,8 +636,16 @@ try {
             fallback.savingsTips!,
             5,
           ),
-          ideas: stringArray(ai.ideas, fallback.ideas!, 5),
-          notes: stringArray(ai.notes, fallback.notes!, 4),
+          ideas: stringArray(
+            ai.ideas,
+            fallback.ideas!,
+            5,
+          ),
+          notes: stringArray(
+            ai.notes,
+            fallback.notes!,
+            4,
+          ),
         }
       : fallback;
 
@@ -674,7 +682,7 @@ try {
       plan,
       meta: {
         engine: ai
-          ? "ollama-qwen2.5-1.5b"
+          ? `${aiResult.engine}-${process.env.VERCEL === "1" ? "production" : "local"}`
           : "rule-based-fallback",
         eventId: eventId ? eventId.slice(0, 200) : null,
         generatedAt: new Date().toISOString(),

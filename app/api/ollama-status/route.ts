@@ -50,6 +50,24 @@ function getOllamaConfig() {
 }
 
 export async function GET() {
+  // Vercel production uses hosted Gemini, not the user's local Ollama.
+  if (process.env.VERCEL === "1") {
+    const configured = Boolean(
+      process.env.GEMINI_API_KEY?.trim(),
+    );
+
+    return NextResponse.json({
+      success: configured,
+      status: configured ? "online" : "offline",
+      provider: "gemini",
+      model: process.env.GEMINI_MODEL || "configured Gemini model",
+      modelAvailable: configured,
+      message: configured
+        ? "Gemini AI is configured for production."
+        : "Gemini API key is not configured. Please check server environment settings.",
+    });
+  }
+
   let model = DEFAULT_MODEL;
 
   try {
@@ -74,7 +92,9 @@ export async function GET() {
         {
           success: false,
           status: "offline",
+          provider: "ollama",
           model,
+          modelAvailable: false,
           message: `Ollama returned HTTP ${response.status}.`,
         },
         { status: 503 },
@@ -90,7 +110,9 @@ export async function GET() {
         {
           success: false,
           status: "offline",
+          provider: "ollama",
           model,
+          modelAvailable: false,
           message: "Ollama returned an invalid response.",
         },
         { status: 503 },
@@ -121,6 +143,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       status: "online",
+      provider: "ollama",
       model,
       modelAvailable,
       message: modelAvailable
@@ -141,7 +164,9 @@ export async function GET() {
       {
         success: false,
         status: "offline",
+        provider: "ollama",
         model,
+        modelAvailable: false,
         message,
       },
       { status: 503 },

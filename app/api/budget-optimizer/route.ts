@@ -1,7 +1,9 @@
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { validateRequestOrigin } from "@/lib/security";
+import { generateAiText } from "@/lib/ai-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +22,7 @@ type Optimization = {
   currentAllocated: number;
   suggestedTotal: number;
   recommendations: Recommendation[];
-  engine: "rules" | "ollama";
+  engine: "rules" | "gemini" | "ollama";
   warnings: string[];
 };
 
@@ -34,26 +36,22 @@ type EventBudgetContext = {
 
 const MAX_BODY_BYTES = 10 * 1024;
 const MAX_EVENT_ID_LENGTH = 200;
-const MAX_OLLAMA_RESPONSE_BYTES = 64 * 1024;
-const OLLAMA_TIMEOUT_MS = 25000;
+const MAX_AI_RESPONSE_LENGTH = 64 * 1024;
+const AI_TIMEOUT_MS = 45_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json(
     { success: false, error: message },
-    { status }
+    { status },
   );
 }
 
 async function readLimitedBody(
-  request: NextRequest
+  request: NextRequest,
 ): Promise<string | null> {
   if (!request.body) return null;
 
@@ -79,7 +77,6 @@ async function readLimitedBody(
     }
 
     result += decoder.decode();
-
     return result;
   } finally {
     reader.releaseLock();
@@ -89,7 +86,7 @@ async function readLimitedBody(
 function makeFallback(event: EventBudgetContext): Optimization {
   const currentAllocated = event.budgetItems.reduce(
     (sum, item) => sum + item.amount,
-    0
+    0,
   );
 
   const aliases = [
@@ -133,12 +130,12 @@ function makeFallback(event: EventBudgetContext): Optimization {
 
   const recommendations: Recommendation[] = aliases.map((group) => {
     const matchingItems = event.budgetItems.filter((item) =>
-      group.names.includes(item.category.toLowerCase())
+      group.names.includes(item.category.toLowerCase()),
     );
 
     const currentAmount = matchingItems.reduce(
       (sum, item) => sum + item.amount,
-      0
+      0,
     );
 
     return {
@@ -154,7 +151,7 @@ function makeFallback(event: EventBudgetContext): Optimization {
     if (
       !recommendations.some(
         (rec) =>
-          rec.category.toLowerCase() === item.category.toLowerCase()
+          rec.category.toLowerCase() === item.category.toLowerCase(),
       )
     ) {
       recommendations.push({
@@ -170,13 +167,8 @@ function makeFallback(event: EventBudgetContext): Optimization {
   let remaining = Math.round(event.budget * 0.9);
 
   const capped = recommendations.map((rec) => {
-    const amount = Math.max(
-      0,
-      Math.min(rec.suggestedAmount, remaining)
-    );
-
+    const amount = Math.max(0, Math.min(rec.suggestedAmount, remaining));
     remaining -= amount;
-
     return { ...rec, suggestedAmount: amount };
   });
 
@@ -186,7 +178,7 @@ function makeFallback(event: EventBudgetContext): Optimization {
     currentAllocated,
     suggestedTotal: capped.reduce(
       (sum, item) => sum + item.suggestedAmount,
-      0
+      0,
     ),
     recommendations: capped,
     engine: "rules",
@@ -201,13 +193,14 @@ function makeFallback(event: EventBudgetContext): Optimization {
 
 function parseRecommendations(
   content: string,
-  fallback: Optimization
+  fallback: Optimization,
+  engine: "gemini" | "ollama",
 ): Optimization {
   try {
     if (
       typeof content !== "string" ||
       content.length === 0 ||
-      content.length > MAX_OLLAMA_RESPONSE_BYTES
+      content.length > MAX_AI_RESPONSE_LENGTH
     ) {
       return fallback;
     }
@@ -219,10 +212,7 @@ function parseRecommendations(
 
     const parsed: unknown = JSON.parse(cleaned);
 
-    if (
-      !isRecord(parsed) ||
-      !Array.isArray(parsed.recommendations)
-    ) {
+    if (!isRecord(parsed) || !Array.isArray(parsed.recommendations)) {
       return fallback;
     }
 
@@ -233,7 +223,7 @@ function parseRecommendations(
         (item: unknown) =>
           isRecord(item) &&
           typeof item.category === "string" &&
-          item.category.toLowerCase() === base.category.toLowerCase()
+          item.category.toLowerCase() === base.category.toLowerCase(),
       );
 
       if (!isRecord(ai)) return base;
@@ -251,26 +241,21 @@ function parseRecommendations(
           ? Math.min(amount, fallback.totalBudget)
           : base.suggestedAmount,
         rationale:
-          typeof ai.rationale === "string" &&
-          ai.rationale.length <= 500
+          typeof ai.rationale === "string" && ai.rationale.length <= 500
             ? ai.rationale
             : base.rationale,
         savingsTip:
-          typeof ai.savingsTip === "string" &&
-          ai.savingsTip.length <= 500
+          typeof ai.savingsTip === "string" && ai.savingsTip.length <= 500
             ? ai.savingsTip
             : base.savingsTip,
       };
     });
 
+    // Enforce the 90% budget cap after AI recommendations.
     let remaining = Math.round(fallback.totalBudget * 0.9);
 
     const limited = recommendations.map((item) => {
-      const suggestedAmount = Math.min(
-        item.suggestedAmount,
-        remaining
-      );
-
+      const suggestedAmount = Math.min(item.suggestedAmount, remaining);
       remaining -= suggestedAmount;
 
       return { ...item, suggestedAmount };
@@ -279,164 +264,77 @@ function parseRecommendations(
     return {
       ...fallback,
       summary:
-        typeof parsed.summary === "string" &&
-        parsed.summary.length <= 1000
+        typeof parsed.summary === "string" && parsed.summary.length <= 1000
           ? parsed.summary
           : fallback.summary,
       suggestedTotal: limited.reduce(
         (sum, item) => sum + item.suggestedAmount,
-        0
+        0,
       ),
       recommendations: limited,
-      engine: "ollama",
+      engine,
     };
   } catch {
     return fallback;
   }
 }
 
-async function getOllamaOptimization(
+async function getAiOptimization(
   context: EventBudgetContext,
-  fallback: Optimization
+  fallback: Optimization,
 ): Promise<Optimization> {
-  const ollamaUrl =
-    process.env.OLLAMA_URL ||
-    "http://127.0.0.1:11434/api/chat";
-
-  let parsedUrl: URL;
-
   try {
-    parsedUrl = new URL(ollamaUrl);
-  } catch {
-    return fallback;
-  }
-
-  if (
-    !["http:", "https:"].includes(parsedUrl.protocol) ||
-    parsedUrl.username ||
-    parsedUrl.password
-  ) {
-    return fallback;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    OLLAMA_TIMEOUT_MS
-  );
-
-  try {
-    const response = await fetch(parsedUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || "qwen2.5:1.5b",
-        stream: false,
-        format: "json",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an event budget advisor. Return only JSON with keys summary and recommendations. For each provided category, return category, suggestedAmount as a whole number in INR, rationale, and savingsTip. Keep the total recommendations within 90% of the total budget. Keep all categories exactly as supplied. Use practical estimates, not claimed live prices.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              event: {
-                name: context.name,
-                type: context.type,
-                guests: context.guests,
-                totalBudgetINR: context.budget,
-                currentAllocations: context.budgetItems,
-              },
-              allowedRecommendations: fallback.recommendations,
-            }),
-          },
-        ],
-        options: {
-          temperature: 0.2,
-          num_predict: 700,
+    const result = await generateAiText({
+      systemPrompt: [
+        "You are an event budget advisor.",
+        "Return only valid JSON with keys summary and recommendations.",
+        "For every supplied category, return category, suggestedAmount as a whole number in INR, rationale, and savingsTip.",
+        "Keep all categories exactly as supplied.",
+        "Never add or remove categories.",
+        "Keep the total recommendations within 90% of the total budget.",
+        "Use practical estimates, not claimed live prices.",
+        "Do not invent vendor quotes or verified market prices.",
+      ].join(" "),
+      userPrompt: JSON.stringify({
+        event: {
+          name: context.name,
+          type: context.type,
+          guests: context.guests,
+          totalBudgetINR: context.budget,
+          currentAllocations: context.budgetItems,
         },
+        allowedRecommendations: fallback.recommendations,
       }),
+      temperature: 0.2,
+      maxOutputTokens: 900,
+      json: true,
+      timeoutMs: AI_TIMEOUT_MS,
     });
 
-    if (!response.ok || !response.body) {
-      return fallback;
-    }
-
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        totalBytes += value.byteLength;
-
-        if (totalBytes > MAX_OLLAMA_RESPONSE_BYTES) {
-          await reader.cancel();
-          return fallback;
-        }
-
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const combined = new Uint8Array(totalBytes);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-      combined.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    const payload: unknown = JSON.parse(
-      new TextDecoder().decode(combined)
-    );
-
-    if (
-      !isRecord(payload) ||
-      !isRecord(payload.message) ||
-      typeof payload.message.content !== "string"
-    ) {
-      return fallback;
-    }
+    if (!result?.text) return fallback;
 
     return parseRecommendations(
-      payload.message.content,
-      fallback
+      result.text,
+      fallback,
+      result.engine,
     );
-  } catch {
+  } catch (error) {
+    console.error("Budget AI optimization failed:", error);
     return fallback;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const originError = validateRequestOrigin(request);
-
     if (originError) return originError;
 
-    const contentLengthHeader =
-      request.headers.get("content-length");
+    const contentLengthHeader = request.headers.get("content-length");
 
     if (contentLengthHeader !== null) {
       const contentLength = Number(contentLengthHeader);
 
-      if (
-        !Number.isSafeInteger(contentLength) ||
-        contentLength < 0
-      ) {
+      if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
         return errorResponse("Invalid content length.", 400);
       }
 
@@ -462,23 +360,20 @@ export async function POST(request: NextRequest) {
 
       body = JSON.parse(rawBody);
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "BODY_TOO_LARGE"
-      ) {
+      if (error instanceof Error && error.message === "BODY_TOO_LARGE") {
         return errorResponse("Request body is too large.", 413);
       }
 
       return errorResponse(
         "Request body must contain valid JSON.",
-        400
+        400,
       );
     }
 
     if (!isRecord(body)) {
       return errorResponse(
         "Request body must be a JSON object.",
-        400
+        400,
       );
     }
 
@@ -509,13 +404,10 @@ export async function POST(request: NextRequest) {
     const budget = Number(event.budget);
     const guests = Number(event.guests);
 
-    if (
-      !Number.isSafeInteger(budget) ||
-      budget <= 0
-    ) {
+    if (!Number.isSafeInteger(budget) || budget <= 0) {
       return errorResponse(
         "Event budget must be greater than zero.",
-        400
+        400,
       );
     }
 
@@ -524,10 +416,7 @@ export async function POST(request: NextRequest) {
       guests < 1 ||
       guests > 5000
     ) {
-      return errorResponse(
-        "Event guest count is invalid.",
-        400
-      );
+      return errorResponse("Event guest count is invalid.", 400);
     }
 
     const budgetItems = event.budgetItems.map((item) => ({
@@ -542,12 +431,12 @@ export async function POST(request: NextRequest) {
           item.category.trim().length === 0 ||
           item.category.length > 100 ||
           !Number.isSafeInteger(item.amount) ||
-          item.amount < 0
+          item.amount < 0,
       )
     ) {
       return errorResponse(
         "Saved budget allocations contain invalid data.",
-        400
+        400,
       );
     }
 
@@ -560,11 +449,7 @@ export async function POST(request: NextRequest) {
     };
 
     const fallback = makeFallback(context);
-
-    const optimization = await getOllamaOptimization(
-      context,
-      fallback
-    );
+    const optimization = await getAiOptimization(context, fallback);
 
     return NextResponse.json({
       success: true,
@@ -575,7 +460,7 @@ export async function POST(request: NextRequest) {
 
     return errorResponse(
       "Unable to optimize the budget. Check the server terminal for details.",
-      500
+      500,
     );
   }
 }

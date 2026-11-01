@@ -3,15 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { validateRequestOrigin } from "@/lib/security";
+import { generateAiText } from "@/lib/ai-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const OLLAMA_URL =
-  process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
-
-const OLLAMA_MODEL =
-  process.env.OLLAMA_MODEL || "qwen2.5:1.5b";
 
 const MAX_BODY_BYTES = 10 * 1024;
 const MAX_EVENT_ID_LENGTH = 200;
@@ -46,33 +41,46 @@ async function parseBody(request: NextRequest) {
     Number.isFinite(contentLength) &&
     contentLength > MAX_BODY_BYTES
   ) {
-    return { error: errorResponse("Request body is too large.", 413) };
+    return {
+      error: errorResponse("Request body is too large.", 413),
+    };
   }
 
   try {
     const rawBody = await request.text();
 
     if (new TextEncoder().encode(rawBody).length > MAX_BODY_BYTES) {
-      return { error: errorResponse("Request body is too large.", 413) };
+      return {
+        error: errorResponse("Request body is too large.", 413),
+      };
     }
 
     const body: unknown = JSON.parse(rawBody);
 
     if (!isObject(body)) {
       return {
-        error: errorResponse("Request body must be a JSON object.", 400),
+        error: errorResponse(
+          "Request body must be a JSON object.",
+          400,
+        ),
       };
     }
 
     return { body: body as CopilotRequest };
   } catch {
     return {
-      error: errorResponse("Request body must be valid JSON.", 400),
+      error: errorResponse(
+        "Request body must be valid JSON.",
+        400,
+      ),
     };
   }
 }
 
-async function verifyEventOwnership(eventId: string, userId: string) {
+async function verifyEventOwnership(
+  eventId: string,
+  userId: string,
+) {
   return prisma.event.findFirst({
     where: {
       id: eventId,
@@ -347,66 +355,40 @@ ${JSON.stringify(eventContext).slice(0, 14000)}
       },
     });
 
-    let ollamaResponse: Response;
+    const historyText = historyForModel
+      .map((item) => {
+        const speaker =
+          item.role === "assistant" ? "Assistant" : "User";
 
-    try {
-      ollamaResponse = await fetch(OLLAMA_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          stream: false,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...historyForModel,
-          ],
-          options: {
-            temperature: 0.4,
-            num_predict: 600,
-          },
-        }),
-        signal: AbortSignal.timeout(60000),
-      });
-    } catch (error) {
-      const timedOut =
-        error instanceof Error &&
-        (error.name === "TimeoutError" ||
-          error.name === "AbortError");
+        return `${speaker}: ${item.content}`;
+      })
+      .join("\n\n");
 
+    const result = await generateAiText({
+      systemPrompt,
+      userPrompt: `
+PREVIOUS CONVERSATION:
+${historyText || "No previous conversation."}
+
+LATEST USER MESSAGE:
+${message}
+
+Answer the latest message directly. Do not repeat the entire event context.
+`,
+      temperature: 0.4,
+      maxOutputTokens: 900,
+      json: false,
+      timeoutMs: 60_000,
+    });
+
+    if (!result) {
       return errorResponse(
-        timedOut
-          ? "The AI took too long to respond. Please try again."
-          : "Could not reach local Ollama. Make sure Ollama is running and the configured model is installed.",
+        "The AI service is temporarily unavailable. Please try again.",
         502,
       );
     }
 
-    if (!ollamaResponse.ok) {
-      return errorResponse(
-        `Ollama returned HTTP ${ollamaResponse.status}. Check that model "${OLLAMA_MODEL}" is installed.`,
-        502,
-      );
-    }
-
-    let result: unknown;
-
-    try {
-      result = await ollamaResponse.json();
-    } catch {
-      return errorResponse(
-        "Ollama returned an invalid response.",
-        502,
-      );
-    }
-
-    const reply =
-      isObject(result) &&
-      isObject(result.message) &&
-      typeof result.message.content === "string"
-        ? result.message.content.trim()
-        : "";
+    const reply = result.text.trim();
 
     if (!reply) {
       return errorResponse(
@@ -431,7 +413,10 @@ ${JSON.stringify(eventContext).slice(0, 14000)}
         name: event.name,
         type: event.type,
       },
-      engine: OLLAMA_MODEL,
+      engine:
+        result.engine === "gemini"
+          ? "gemini"
+          : "ollama-qwen2.5-1.5b",
       context: {
         hasSavedPlan: Boolean(event.plan),
         budgetItems: event.budgetItems.length,
