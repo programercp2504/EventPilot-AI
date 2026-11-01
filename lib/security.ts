@@ -7,6 +7,7 @@ const ALLOWED_ORIGINS = new Set([
   "https://event-pilot-ai-liart.vercel.app",
   "https://event-pilot-ai-git-main-acme0cp.vercel.app",
   "https://event-pilot-mppkqld00-acme0cp.vercel.app",
+  "https://event-pilot-3aud6xuh1-acme0cp.vercel.app",
 ]);
 
 const STATE_CHANGING_METHODS = new Set([
